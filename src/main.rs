@@ -46,7 +46,7 @@ fn load_and_partition_mnist() -> (Vec<(Vec<u8>, Vec<u8>)>, Vec<(Vec<u8>, Vec<u8>
 pub fn main() {
     let (prove_fib, verify_fib) = guest::build_fib();
     let mut rng = rand::thread_rng();
-
+    const TOTAL_WEIGHTS: usize = 8790;
 //     // Sinh 6,400 ảnh, mỗi ảnh 16 byte
 //     let n_images = 640;
 //     let mut all_images = vec![0u8; n_images * 16];
@@ -84,22 +84,51 @@ pub fn main() {
 //    println!("Proof valid: {}", valid);
 
 //     }
+  // Sinh dữ liệu giả: ví dụ 20 ảnh (mỗi ảnh 784 byte) và 20 nhãn.
+  let n_images = 20;
+  let mut images = vec![0u8; n_images * 784];
+  let mut labels = vec![0u8; n_images];
+  let mut rng = rand::thread_rng();
+  for i in 0..(n_images * 784) {
+      images[i] = rng.gen_range(0..=255);
+  }
+  for i in 0..n_images {
+      labels[i] = rng.gen_range(0..=9);
+  }
+  // Khởi tạo trọng số ban đầu dưới dạng [u8] với độ dài TOTAL_WEIGHTS * 4.
+  let total_bytes = TOTAL_WEIGHTS * 4;
+  // Giả sử trọng số ban đầu được khởi tạo với giá trị 1 (với mỗi i32 có giá trị 1).
+  let mut init_weights = vec![1u8; total_bytes];
 
-    let n_images = 1;
-    let mut images = vec![0u8; n_images * 784];
-    let mut labels = vec![0u8; n_images];
-    for i in 0..(n_images * 784) {
-        images[i] = rng.gen_range(0..=255);
-    }
-    for i in 0..n_images {
-        labels[i] = rng.gen_range(0..=9);
-    }
-    let mut weights = vec![1; 21750];
-    println!("images: {:?}", images);
+  // Chia dữ liệu thành các batch trong main.
+  let batch_size = 10;
+  let mut global_weights = init_weights; // Trọng số lũy tiến.
+  let total_batches = n_images / batch_size;
+  for b in 0..total_batches {
+      let start = b * batch_size * 784;
+      let end = start + batch_size * 784;
+      let batch_images = &images[start..end];
+      let batch_labels = &labels[b * batch_size..b * batch_size + batch_size];
+      // Gọi fib() cho batch hiện tại; fib() trả về trọng số mới dạng Vec<u8>.
+      (nweights, proof) = prove_fib(batch_images, batch_labels, &global_weights);
+      println!("Updated weights: {:?}", nweights);
+      global_weights = nweights
+  }
+  // Nếu có phần dư (không chia hết), xử lý phần còn lại.
+  let remainder = n_images % batch_size;
+  if remainder > 0 {
+      let start = total_batches * batch_size * 784;
+      let batch_images = &images[start..];
+      let batch_labels = &labels[total_batches * batch_size..];
+      (nweights, proof) = prove_fib(batch_images, batch_labels, &global_weights);
+      println!("Updated weights: {:?}", nweights);
+      global_weights = nweights
+  }
+  println!("global_weights weights: {:?}", global_weights);
     // Call prove_fib() with images, labels, and the mutable weights.
     // prove_fib() is expected to update weights in place and return a proof.
-    let (nweights, proof) = prove_fib(&images, &labels);
-       println!("Updated weights: {:?}", nweights);
+    // let (nweights, proof) = prove_fib(&images, &labels);
+    //    println!("Updated weights: {:?}", nweights);
 
     // 5) Thử forward xem logits cuối
     // let (logits, _, _) = forward_cnn(
