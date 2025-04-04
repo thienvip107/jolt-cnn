@@ -46,7 +46,7 @@ fn load_and_partition_mnist() -> (Vec<(Vec<u8>, Vec<u8>)>, Vec<(Vec<u8>, Vec<u8>
 pub fn main() {
     let (prove_fib, verify_fib) = guest::build_fib();
     let mut rng = rand::thread_rng();
-    const TOTAL_WEIGHTS: usize = 8790;
+    const TOTAL_WEIGHTS: usize = 6796;
 //     // Sinh 6,400 ảnh, mỗi ảnh 16 byte
 //     let n_images = 640;
 //     let mut all_images = vec![0u8; n_images * 16];
@@ -101,7 +101,7 @@ pub fn main() {
   let mut init_weights = vec![1u8; total_bytes];
 
   // Chia dữ liệu thành các batch trong main.
-  let batch_size = 10;
+  let batch_size = 1;
   let mut global_weights = init_weights; // Trọng số lũy tiến.
   let total_batches = n_images / batch_size;
   for b in 0..total_batches {

@@ -7,7 +7,11 @@ use alloc::vec::Vec;
 type Fixed = i32;
 const FP_SHIFT: u32 = 8;
 const FP_ONE: Fixed = 1 << FP_SHIFT; // 256
-const TOTAL_WEIGHTS: usize = 8790;
+// Mô hình rút gọn:
+// conv: 4 bộ lọc, kernel 3×3 → 4×3×3 = 36 trọng số.
+// FC: 10 neuron, mỗi neuron nhận 676 đầu vào → 10×676 = 6760 trọng số.
+// Tổng trọng số = 36 + 6760 = 6796.
+const TOTAL_WEIGHTS: usize = 6796;
 use serde::{Serialize, Deserialize};
 // Multiply Q8.8
 fn fixed_mul(a: Fixed, b: Fixed) -> Fixed {
@@ -20,46 +24,57 @@ fn fixed_from_pixel(px: u8) -> Fixed {
     (px as i32 * FP_ONE) / 255
 }
 struct Model {
-    conv1: [[[Fixed; 5]; 5]; 10],
-    fc1: [[Fixed; 864]; 10],
+    conv: [[[Fixed; 3]; 3]; 4],
+    fc: [[Fixed; 676]; 10],
 }
 
 impl Model {
     fn new() -> Self {
         Model {
-            conv1: [[[1; 5]; 5]; 10],
-            fc1: [[1; 864]; 10],
+            conv: [[[1; 3]; 3]; 4],
+            fc: [[1; 676]; 10],
         }
     }
 
-    /// load_weights: Sử dụng slice input (độ dài = TOTAL_WEIGHTS) để khởi tạo các trọng số của mô hình.
-    fn load_weights(&mut self, input: &[i32]) {
+    /// load_weights: nhận đầu vào là slice `[u8]` (độ dài = TOTAL_WEIGHTS * 4),
+    /// chuyển sang Vec<i32> và nạp vào các trường của mô hình.
+    fn load_weights(&mut self, input: &[u8]) {
+        assert!(
+            input.len() == TOTAL_WEIGHTS * 4,
+            "Weights must be {} bytes",
+            TOTAL_WEIGHTS * 4
+        );
+        let input_i32: Vec<i32> = input
+            .chunks_exact(4)
+            .map(|chunk| i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect();
         let mut idx = 0;
-        // conv1: 10×5×5 = 250 phần tử.
-        for f in 0..10 {
-            for i in 0..5 {
-                for j in 0..5 {
-                    self.conv1[f][i][j] = input[idx];
+        // Conv: 4×3×3 = 36 phần tử.
+        for f in 0..4 {
+            for i in 0..3 {
+                for j in 0..3 {
+                    self.conv[f][i][j] = input_i32[idx];
                     idx += 1;
                 }
             }
         }
-        // fc1: 10×864 = 8640 phần tử.
+        // FC: 10×676 = 6760 phần tử.
         for i in 0..10 {
-            for j in 0..864 {
-                self.fc1[i][j] = input[idx];
+            for j in 0..676 {
+                self.fc[i][j] = input_i32[idx];
                 idx += 1;
             }
         }
     }
 
+
     /// forward: Thực hiện forward pass cho 1 ảnh (784 byte, 28×28).
     /// Các bước:
     /// 1. Chuyển đổi ảnh thành mảng 28×28 dạng Q8.8.
-    /// 2. Convolution: Với 10 bộ lọc, kernel 5×5 → output 24×24 cho mỗi bộ lọc.
-    /// 3. Pooling: 2×2 max pooling → output 12×12 cho mỗi bộ lọc.
-    /// 4. Flatten: Giả sử sử dụng 6 bộ lọc đầu → 6×12×12 = 864 phần tử.
-    /// 5. Fully Connected: Tính logits từ 864 đầu vào cho 10 neuron (fc1).
+    /// 2. Convolution: Với 4 bộ lọc, kernel 3×3, valid convolution → output kích thước 26×26.
+    /// 3. Pooling: 2×2 max pooling → output kích thước 13×13 cho mỗi bộ lọc.
+    /// 4. Flatten: Nối tất cả các output pooling thành vector 4×13×13 = 676 phần tử.
+    /// 5. Fully Connected: Tính logits từ 676 đầu vào cho 10 neuron (fc).
     fn forward(&self, image: &[u8]) -> (Vec<Fixed>, Vec<Vec<Fixed>>) {
         // 1) Chuyển ảnh 784 byte thành mảng 28×28 dạng Q8.8.
         let mut input = [[0; 28]; 28];
@@ -68,54 +83,54 @@ impl Model {
                 input[i][j] = fixed_from_pixel(image[i * 28 + j]);
             }
         }
-        // 2) Convolution: Với 10 bộ lọc, mỗi output kích thước 24×24.
-        let mut conv_out: Vec<Vec<Fixed>> = vec![vec![0; 24 * 24]; 10];
-        for f in 0..10 {
-            for r in 0..24 {
-                for c in 0..24 {
+        // 2) Convolution: Với 4 bộ lọc, kernel 3×3, output: 26×26.
+        let mut conv_out: Vec<Vec<Fixed>> = vec![vec![0; 26 * 26]; 4];
+        for f in 0..4 {
+            for r in 0..26 {
+                for c in 0..26 {
                     let mut sum = 0;
-                    for kr in 0..5 {
-                        for kc in 0..5 {
-                            sum += fixed_mul(self.conv1[f][kr][kc], input[r + kr][c + kc]);
+                    for kr in 0..3 {
+                        for kc in 0..3 {
+                            sum += fixed_mul(self.conv[f][kr][kc], input[r + kr][c + kc]);
                         }
                     }
                     if sum < 0 { sum = 0; }
-                    conv_out[f][r * 24 + c] = sum;
+                    conv_out[f][r * 26 + c] = sum;
                 }
             }
         }
-        // 3) Pooling: 2×2 max pooling → output kích thước 12×12 cho mỗi bộ lọc.
-        let mut pool_out: Vec<Vec<Fixed>> = vec![vec![0; 12 * 12]; 10];
-        for f in 0..10 {
-            for r in 0..12 {
-                for c in 0..12 {
+        // 3) Pooling: 2×2 max pooling trên mỗi conv_out, output: 13×13 cho mỗi filter.
+        let mut pool_out: Vec<Vec<Fixed>> = vec![vec![0; 13 * 13]; 4];
+        for f in 0..4 {
+            for r in 0..13 {
+                for c in 0..13 {
                     let mut max_val = 0;
                     for dr in 0..2 {
                         for dc in 0..2 {
-                            let idx = (r * 2 + dr) * 24 + (c * 2 + dc);
+                            let idx = (r * 2 + dr) * 26 + (c * 2 + dc);
                             if conv_out[f][idx] > max_val {
                                 max_val = conv_out[f][idx];
                             }
                         }
                     }
-                    pool_out[f][r * 12 + c] = max_val;
+                    pool_out[f][r * 13 + c] = max_val;
                 }
             }
         }
-        // 4) Flatten: sử dụng 6 bộ lọc đầu → 6×12×12 = 864 phần tử.
-        let mut flat = vec![0; 864];
-        for f in 0..6 {
-            for i in 0..144 {
-                flat[f * 144 + i] = pool_out[f][i];
+        // 4) Flatten: Nối output của 4 bộ lọc → 4×13×13 = 676 phần tử.
+        let mut flat = vec![0; 676];
+        for f in 0..4 {
+            for i in 0..(13 * 13) {
+                flat[f * 169 + i] = pool_out[f][i];
             }
         }
-        // 5) FC: Tính logits từ vector flat (864 phần tử) cho 10 neuron.
+        // 5) Fully Connected: Tính logits từ flat cho 10 neuron.
         let mut logits = vec![0; 10];
         let mut fc_out = vec![0; 10];
         for i in 0..10 {
             let mut sum = 0;
-            for j in 0..864 {
-                sum += fixed_mul(self.fc1[i][j], flat[j]);
+            for j in 0..676 {
+                sum += fixed_mul(self.fc[i][j], flat[j]);
             }
             fc_out[i] = if sum > 0 { sum } else { 0 };
             logits[i] = fc_out[i];
@@ -123,24 +138,22 @@ impl Model {
         (logits, vec![flat, fc_out])
     }
 
-    /// backward: Tính gradient cho lớp FC sử dụng loss MSE (one-hot target).
-    /// Ở đây target có giá trị FP_ONE tại vị trí nhãn.
+    /// backward: Tính gradient cho lớp FC sử dụng loss MSE (one-hot target: FP_ONE tại vị trí nhãn).
     fn backward(&mut self, _image: &[u8], label: u8, logits: Vec<Fixed>, intermediates: Vec<Vec<Fixed>>) {
-        let flat = &intermediates[0]; // flat có độ dài 864.
+        let flat = &intermediates[0]; // flat có độ dài 676.
         let mut target = vec![0; 10];
         if (label as usize) < 10 {
             target[label as usize] = FP_ONE;
         }
         let error: Vec<Fixed> = logits.iter().zip(target.iter()).map(|(&l, &t)| l - t).collect();
         let lr: Fixed = 1; // learning rate.
-        // Cập nhật trọng số của lớp FC (fc1): kích thước 10×864.
+        // Cập nhật trọng số của FC (fc): kích thước 10×676.
         for i in 0..10 {
-            for j in 0..864 {
+            for j in 0..676 {
                 let grad = fixed_mul(error[i], flat[j]);
-                self.fc1[i][j] -= fixed_mul(lr, grad);
+                self.fc[i][j] -= fixed_mul(lr, grad);
             }
         }
-        // (Gradient cho lớp conv chưa được tính trong ví dụ này.)
     }
 
     fn train_image(&mut self, image: &[u8], label: u8) {
@@ -148,8 +161,7 @@ impl Model {
         self.backward(image, label, logits, intermediates);
     }
 
-    /// train_batch: Huấn luyện trên 1 batch gồm nhiều ảnh.
-    /// Ảnh được lưu liên tiếp (mỗi ảnh 784 byte), labels chứa nhãn tương ứng.
+    /// train_batch: Huấn luyện trên một batch (ảnh lưu liên tiếp, mỗi ảnh 784 byte).
     fn train_batch(&mut self, images: &[u8], labels: &[u8]) {
         let n = labels.len();
         for i in 0..n {
@@ -160,41 +172,37 @@ impl Model {
         }
     }
 
-    /// flatten_weights: Gom tất cả trọng số của mô hình thành Vec<i32>.
-    /// Ở đây mô hình có trọng số = conv1 (250 phần tử) nối với fc1 (8640 phần tử) = 250 + 8640 = 8890.
+    /// flatten_weights: Gom tất cả trọng số của mô hình thành một Vec<i32>.
+    /// Mô hình có trọng số = conv (4×3×3 = 36) nối với fc (10×676 = 6760) = 36 + 6760 = 6796.
     fn flatten_weights(&self) -> Vec<Fixed> {
-        let mut w = Vec::with_capacity(250 + 8640);
-        for f in 0..10 {
-            for i in 0..5 {
-                for j in 0..5 {
-                    w.push(self.conv1[f][i][j]);
+        let mut w = Vec::with_capacity(36 + 6760);
+        for f in 0..4 {
+            for i in 0..3 {
+                for j in 0..3 {
+                    w.push(self.conv[f][i][j]);
                 }
             }
         }
         for i in 0..10 {
-            for j in 0..864 {
-                w.push(self.fc1[i][j]);
+            for j in 0..676 {
+                w.push(self.fc[i][j]);
             }
         }
         w
     }
 }
 
-
-#[jolt::provable(stack_size = 900000000, memory_size = 9000000000000, max_input_size = 900000, max_output_size = 900000)]
+#[jolt::provable(stack_size = 90000000, memory_size = 900000000000, max_input_size = 9000000, max_output_size = 9000000)]
 fn fib(
     images: &[u8],    // n ảnh, mỗi ảnh 784 byte (28×28)
     labels: &[u8],    // n nhãn
     weights: &[u8] // Mảng trọng số đầu vào, kích thước phải bằng TOTAL_WEIGHTS (8790)
 ) -> Vec<u8> {
-    let input_weights: Vec<i32> = weights.chunks_exact(4)
-        .map(|chunk| i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect();
     let mut model = Model::new();
-    model.load_weights(&input_weights);
+    model.load_weights(weights);
 
     // Huấn luyện model trên toàn bộ ảnh của batch.
-    model.train_batch(images, labels);
+    model.train_image(images, labels[0]);
 
     // Lấy trọng số mới từ mô hình.
     let new_weights = model.flatten_weights();
