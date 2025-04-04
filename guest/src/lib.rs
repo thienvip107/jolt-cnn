@@ -181,7 +181,7 @@ impl Model {
 }
 
 
-#[jolt::provable(stack_size = 10000000, memory_size = 900000000000)]
+#[jolt::provable(stack_size = 900000000, memory_size = 9000000000000, max_input_size = 900000, max_output_size = 900000)]
 fn fib(
     images: &[u8],    // n ảnh, mỗi ảnh 784 byte (28×28)
     labels: &[u8],    // n nhãn
