@@ -110,21 +110,21 @@ pub fn main() {
       let batch_images = &images[start..end];
       let batch_labels = &labels[b * batch_size..b * batch_size + batch_size];
       // Gọi fib() cho batch hiện tại; fib() trả về trọng số mới dạng Vec<u8>.
-      (nweights, proof) = prove_fib(batch_images, batch_labels, &global_weights);
+      let (nweights, proof) = prove_fib(batch_images, batch_labels, &global_weights);
       println!("Updated weights: {:?}", nweights);
       global_weights = nweights
   }
   // Nếu có phần dư (không chia hết), xử lý phần còn lại.
-  let remainder = n_images % batch_size;
-  if remainder > 0 {
-      let start = total_batches * batch_size * 784;
-      let batch_images = &images[start..];
-      let batch_labels = &labels[total_batches * batch_size..];
-      (nweights, proof) = prove_fib(batch_images, batch_labels, &global_weights);
-      println!("Updated weights: {:?}", nweights);
-      global_weights = nweights
-  }
-  println!("global_weights weights: {:?}", global_weights);
+//   let remainder = n_images % batch_size;
+//   if remainder > 0 {
+//       let start = total_batches * batch_size * 784;
+//       let batch_images = &images[start..];
+//       let batch_labels = &labels[total_batches * batch_size..];
+//       (nweights, proof) = prove_fib(batch_images, batch_labels, &global_weights);
+//       println!("Updated weights: {:?}", nweights);
+//       global_weights = nweights
+//   }
+//   println!("global_weights weights: {:?}", global_weights);
     // Call prove_fib() with images, labels, and the mutable weights.
     // prove_fib() is expected to update weights in place and return a proof.
     // let (nweights, proof) = prove_fib(&images, &labels);
